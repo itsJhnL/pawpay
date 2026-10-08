@@ -15,8 +15,9 @@ model Presence {
   id       String   @id // client-generated session uuid
   lat      Float // ALREADY privacy-offset coords (raw is never stored)
   lng      Float
-  busy     Boolean  @default(false) // true while in an active connection
-  lastSeen DateTime
+  busy      Boolean  @default(false) // true while in an active connection
+  partnerId String? // who they're connected to; only that pair can free each other
+  lastSeen  DateTime
 
   @@index([lastSeen])
 }

@@ -69,17 +69,29 @@ export async function POST(request: NextRequest) {
   }
 
   // Busy transitions:
-  // - accept: the connection is now active → mark BOTH peers busy.
-  // - decline/end: free both peers.
+  // - accept: the connection is now active → mark BOTH peers busy and record
+  //   who each is paired with.
+  // - decline/end: free the pair, but only if they really are paired with each
+  //   other. A stale "end" from someone else (e.g. a timed-out requester) must
+  //   not free a user who is mid-conversation with a third person.
   if (signalType === "accept") {
     await prisma.presence.updateMany({
-      where: { id: { in: [fromId, toId] } },
-      data: { busy: true },
+      where: { id: fromId },
+      data: { busy: true, partnerId: toId },
     });
-  } else if (signalType === "decline") {
     await prisma.presence.updateMany({
-      where: { id: { in: [fromId, toId] } },
-      data: { busy: false },
+      where: { id: toId },
+      data: { busy: true, partnerId: fromId },
+    });
+  } else if (signalType === "decline" || signalType === "end") {
+    await prisma.presence.updateMany({
+      where: {
+        OR: [
+          { id: fromId, partnerId: toId },
+          { id: toId, partnerId: fromId },
+        ],
+      },
+      data: { busy: false, partnerId: null },
     });
   }
 
