@@ -85,7 +85,19 @@ export class PeerSession {
     };
   }
 
-  async handleSignal(type: DescType, payload: string) {
+  // Signals arrive in bursts from one poll (offer + many ICE candidates). They
+  // must be applied strictly in order: running them concurrently lets ICE land
+  // while setRemoteDescription is still pending, and those candidates get lost.
+  private signalQueue: Promise<void> = Promise.resolve();
+
+  handleSignal(type: DescType, payload: string): Promise<void> {
+    this.signalQueue = this.signalQueue
+      .then(() => this.applySignal(type, payload))
+      .catch(() => {});
+    return this.signalQueue;
+  }
+
+  private async applySignal(type: DescType, payload: string) {
     if (this.closed) return;
     const data = JSON.parse(payload);
 
@@ -107,8 +119,9 @@ export class PeerSession {
     this.ignoreOffer = !this.polite && offerCollision;
     if (this.ignoreOffer) return;
 
-    await this.flushPendingCandidates();
     await this.pc.setRemoteDescription(desc);
+    // Candidates can only be added once a remote description exists.
+    await this.flushPendingCandidates();
     if (desc.type === "offer") {
       await this.pc.setLocalDescription();
       if (this.pc.localDescription) {
