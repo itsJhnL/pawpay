@@ -83,6 +83,8 @@ export default function Home() {
       onRemoteStream: (stream) => setRemoteStream(stream),
       onConnectionState: (state) => {
         if (state === "failed") {
+          // Tell the server too, or both users stay marked busy forever.
+          void sendSignal(sessionId, peerId, "end");
           teardown("Connection failed (network).");
         }
       },
@@ -265,9 +267,22 @@ export default function Home() {
     }
   }
 
+  // If the other side's presence row is gone (tab closed, or stale after a
+  // crash), end the connection instead of waiting on WebRTC to time out. The
+  // "end" also frees our own busy flag on the server.
+  function dropIfPeerGone(online: PeerDot[]) {
+    const c = connRef.current;
+    if (c.kind === "idle" || online.some((p) => p.id === c.peerId)) return;
+    void sendSignal(sessionId, c.peerId, "end");
+    if (c.kind === "incoming") setConn({ kind: "idle" });
+    else teardown("Stranger disconnected.");
+  }
+
   const processSignalRef = useRef(processSignal);
+  const dropIfPeerGoneRef = useRef(dropIfPeerGone);
   useEffect(() => {
     processSignalRef.current = processSignal;
+    dropIfPeerGoneRef.current = dropIfPeerGone;
   });
 
   useEffect(() => {
@@ -281,6 +296,7 @@ export default function Home() {
         if (!active) return;
         setPeers(data.peers);
         for (const s of data.signals) processSignalRef.current(s);
+        dropIfPeerGoneRef.current(data.peers);
       } catch {}
       if (active) timer = setTimeout(tick, POLL_INTERVAL_MS);
     };
@@ -295,13 +311,23 @@ export default function Home() {
   useEffect(() => {
     if (!sessionId || phase !== "live") return;
     const onLeave = () => leave(sessionId);
+    // pagehide also fires when the page enters the back/forward cache. If the
+    // user comes back, our presence row is already gone — re-join so we're
+    // visible again instead of silently invisible.
+    const onShow = (e: PageTransitionEvent) => {
+      if (e.persisted && myLocation) {
+        void join(sessionId, myLocation.lat, myLocation.lng);
+      }
+    };
     window.addEventListener("pagehide", onLeave);
     window.addEventListener("beforeunload", onLeave);
+    window.addEventListener("pageshow", onShow);
     return () => {
       window.removeEventListener("pagehide", onLeave);
       window.removeEventListener("beforeunload", onLeave);
+      window.removeEventListener("pageshow", onShow);
     };
-  }, [sessionId, phase]);
+  }, [sessionId, phase, myLocation]);
 
   async function handleReady(lat: number, lng: number) {
     setMyLocation({ lat, lng });
